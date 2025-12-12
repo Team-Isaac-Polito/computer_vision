@@ -1,12 +1,21 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
+    mode_arg = DeclareLaunchArgument(
+        'mode',
+        default_value='2',
+        description='Detection mode to set'
+    )
+    
+    mode = LaunchConfiguration('mode')
+    
     try:
         realsense_pkg_dir = get_package_share_directory('realsense2_camera')
         realsense_launch_file = os.path.join(realsense_pkg_dir, 'launch', 'rs_launch.py')
@@ -43,13 +52,13 @@ def generate_launch_description():
     set_mode_service_call = ExecuteProcess(
         cmd=['sleep', '5', '&&',    # wait for nodes to be up
              'ros2', 'service', 'call', '/detection/set_mode', 
-             'reseq_interfaces/srv/SetMode', '"{mode: 2}"'],
+             'reseq_interfaces/srv/SetMode', ['"{mode: ', mode, '}"']],
         output='screen',
         shell=True,
     )
 
     return LaunchDescription(
-        realsense_camera_launch + [
+        [mode_arg] + realsense_camera_launch + [
             detection_manager_node,
             detector_node,
             set_mode_service_call
