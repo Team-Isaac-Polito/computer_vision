@@ -2,3 +2,10 @@
 hazmat_detection/utils/frequency_class.png
 .vs
 .vscode
+__pycache__/
+
+# Ignore everything in runs/detect except train/weights
+object_detection/runs/detect/*
+!object_detection/runs/detect/train/
+object_detection/runs/detect/train/*
+!object_detection/runs/detect/train/weights/
