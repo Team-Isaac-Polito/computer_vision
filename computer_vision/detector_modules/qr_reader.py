@@ -1,10 +1,8 @@
 import cv2
 from ament_index_python.packages import get_package_share_directory
-
 # pip install opencv-contrib-python
-
-share_folder = get_package_share_directory("reseq_ros2")
-models_path = f"{share_folder}/ml-ckpt"
+share_folder = get_package_share_directory("computer_vision")
+models_path = f"{share_folder}/detector_modules/models"
 
 # Path of the model files
 # from https://github.com/WeChatCV/opencv_3rdparty
