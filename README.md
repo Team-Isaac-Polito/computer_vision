@@ -1,4 +1,4 @@
-﻿# Computer Vision
+﻿# computer_vision
 
 This ROS2 package provides comprehensive computer vision capabilities for autonomous search and rescue robots competing in the RoboCup Rescue Robot League. The system enables robots to detect, identify, and localize victims, hazardous materials, navigation markers, and objects in disaster environments.
 
@@ -140,11 +140,19 @@ Detections in MAPPING mode are logged to `~/reseq_detections.csv` with the follo
 - **Model**: YOLOv11n fine-tuned on rescue objects
 - **Classes**: Victims, debris, mission-specific objects
 - **Weights**: `object_detection/runs/detect/train/weights/best.pt`
+- **TensorRT Engine**: `object_detection/runs/detect/train/weights/best.engine` (FP16, ~9 MB)
 
 ### Hazmat Detection (`hazmat_detection/`)
 - **Model**: YOLOv11n fine-tuned on hazmat placards
 - **Classes**: Various NFPA 704 diamonds, DOT placards, hazard symbols
 - **Weights**: `hazmat_detection/runs/detect/train/weights/best.pt`
+- **TensorRT Engine**: `hazmat_detection/runs/detect/train/weights/best.engine` (FP16, ~9 MB)
+
+### TensorRT Inference
+
+Pre-exported TensorRT `.engine` files (FP16) are included in the repo for faster inference on Jetson GPUs (~15–20 ms vs ~40–50 ms with PyTorch). The detector node automatically loads `.engine` files when available, falling back to `.pt` weights otherwise.
+
+> **Note:** Engine files are hardware-specific (exported on Orin Nano, JetPack 6.2). If you change the Jetson hardware or JetPack version, re-export using `scripts/export_engines.py`. See the [Jetson Orin Nano documentation](https://docs.teamisaac.it/doc/jetson-orin-nano-dev-kit-yvo2K1WGDJ) for detailed instructions.
 
 ## Training New Models
 
@@ -155,9 +163,6 @@ cd ~/ros2_ws/src/computer_vision/object_detection
 
 # Open Jupyter notebook for training
 jupyter notebook model.ipynb
-
-# Export trained model
-python exporter.py
 ```
 
 ### Hazmat Detection
@@ -167,12 +172,20 @@ cd ~/ros2_ws/src/computer_vision/hazmat_detection
 
 # Train model
 jupyter notebook model.ipynb
-
-# Export trained model
-python exporter.py
 ```
 
 The training datasets should be placed in the respective `dataset/` directories (ignored by git) from the links provided in the respective `model.ipynb` files.
+
+### Exporting TensorRT Engines
+
+After training or when deploying on a new Jetson device, export both models to TensorRT:
+
+```bash
+# On the Jetson (inside the Docker container):
+python3 scripts/export_engines.py
+```
+
+This exports both hazmat and object detection models to FP16 TensorRT engines (~5–10 min per model). See the [Jetson Orin Nano documentation](https://docs.teamisaac.it/doc/jetson-orin-nano-dev-kit-yvo2K1WGDJ) for full setup and deployment instructions.
 
 ## Configuration
 

@@ -1,4 +1,5 @@
 # The comments in this file are now in English as requested.
+import os
 import traceback
 
 import cv2
@@ -8,17 +9,16 @@ from ament_index_python.packages import get_package_share_directory
 from apriltag_msgs.msg import AprilTagDetectionArray
 from cv_bridge import CvBridge
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import UInt8
 from ultralytics import YOLO
 
-from reseq_interfaces.msg import Detection
 from computer_vision.detector_modules.apriltag_detector import AprilTagDetector
-from computer_vision.detector_modules.motion_detection import MotionDetection
 from computer_vision.detector_modules.concentric_c import OrientationDetection
+from computer_vision.detector_modules.motion_detection import MotionDetection
 from computer_vision.detector_modules.qr_reader import process_qr_codes
-
-
+from reseq_interfaces.msg import Detection
 
 # Mode constants
 MODE_OFF = 0
@@ -37,9 +37,16 @@ class Detector(Node):
         image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.get_logger().info(f"Listening for images on: '{image_topic}'")
 
-        # Mode handling
+        # Mode handling – QoS must match the TRANSIENT_LOCAL publisher in
+        # detection_manager so the detector receives the latched mode even when
+        # it subscribes after the mode was already published.
         self.current_mode = MODE_OFF
-        self.create_subscription(UInt8, '/detection/mode', self._on_mode_update, 10)
+        mode_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(UInt8, '/detection/mode', self._on_mode_update, mode_qos)
         self.get_logger().info('Subscribed to /detection/mode for runtime control')
 
         # Camera Subscriptions
@@ -68,14 +75,17 @@ class Detector(Node):
         self.detection_pub = self.create_publisher(Detection, '/object_detection/detections', 10)
         self.depth_pub = self.create_publisher(Image, '/object_detection/depthsized', 10)
 
-        # YOLO Models
+        # YOLO Models – prefer TensorRT .engine (FP16) for maximum inference
+        # speed on NVIDIA Jetson.  If an .engine file does not yet exist next to
+        # the .pt weights it is exported automatically on first launch (one‑time
+        # cost of ~2-5 min on Orin Nano).
         self.img_size = (640, 640)  # Standard YOLO input size
-        share_folder = get_package_share_directory("computer_vision")
-        model_path1 = f'{share_folder}/hazmat_detection/runs/detect/train/weights/best.pt'
-        model_path2 = f'{share_folder}/object_detection/runs/detect/train/weights/best.pt'
+        share_folder = get_package_share_directory('computer_vision')
+        pt_path1 = f'{share_folder}/hazmat_detection/runs/detect/train/weights/best.pt'
+        pt_path2 = f'{share_folder}/object_detection/runs/detect/train/weights/best.pt'
 
-        self.model1 = YOLO(model_path1)  # Hazmat
-        self.model2 = YOLO(model_path2)  # Objects
+        self.model1 = self._load_model(pt_path1, 'hazmat')
+        self.model2 = self._load_model(pt_path2, 'object')
 
         # Custom CV Modules
         self.od = OrientationDetection()
@@ -93,6 +103,39 @@ class Detector(Node):
         self.detection_counter = 1
 
         self.get_logger().info('Detector initialized successfully')
+
+    # ------------------------------------------------------------------
+    # TensorRT model helper
+    # ------------------------------------------------------------------
+    def _load_model(self, pt_path: str, name: str) -> YOLO:
+        """Load a YOLO model, preferring TensorRT FP16 .engine for speed.
+
+        If the .engine file already exists beside the .pt weights it is loaded
+        directly.  Otherwise the .pt model is exported to TensorRT FP16 first
+        (requires CUDA/TensorRT on the device).  When neither a GPU nor
+        TensorRT is available the .pt weights are used as a fallback.
+        """
+        engine_path = pt_path.replace('.pt', '.engine')
+
+        if os.path.isfile(engine_path):
+            self.get_logger().info(f'[{name}] Loading TensorRT engine: {engine_path}')
+            return YOLO(engine_path, task='detect')
+
+        # Attempt TensorRT export (FP16 for best Jetson performance)
+        try:
+            self.get_logger().info(
+                f'[{name}] TensorRT engine not found \u2013 exporting from {pt_path} '
+                '(this may take a few minutes on first launch)\u2026'
+            )
+            model = YOLO(pt_path)
+            export_path = model.export(format='engine', half=True)
+            self.get_logger().info(f'[{name}] TensorRT export complete: {export_path}')
+            return YOLO(export_path, task='detect')
+        except Exception as e:
+            self.get_logger().warn(
+                f'[{name}] TensorRT export failed ({e}), falling back to PyTorch weights'
+            )
+            return YOLO(pt_path)
 
     def _on_mode_update(self, msg):
         new_mode = int(msg.data)

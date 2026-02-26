@@ -14,8 +14,14 @@ setup(
      ('share/' + package_name, ['package.xml']),
      (f'share/{package_name}/launch', glob('launch/*launch.py')),
      (f'share/{package_name}/detector_modules/models', glob('computer_vision/detector_modules/models/*')),
-     (f'share/{package_name}/hazmat_detection/runs/detect/train/weights', ['hazmat_detection/runs/detect/train/weights/best.pt']),
-     (f'share/{package_name}/object_detection/runs/detect/train/weights', ['object_detection/runs/detect/train/weights/best.pt']),
+     (f'share/{package_name}/hazmat_detection/runs/detect/train/weights', [
+         'hazmat_detection/runs/detect/train/weights/best.pt',
+         'hazmat_detection/runs/detect/train/weights/best.engine',
+     ]),
+     (f'share/{package_name}/object_detection/runs/detect/train/weights', [
+         'object_detection/runs/detect/train/weights/best.pt',
+         'object_detection/runs/detect/train/weights/best.engine',
+     ]),
    ],
  install_requires=['setuptools'],
  zip_safe=True,
