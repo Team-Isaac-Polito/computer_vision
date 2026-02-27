@@ -102,6 +102,16 @@ class Detector(Node):
         self.camera_frame = 'camera_depth_optical_frame'
         self.detection_counter = 1
 
+        # Frame skipping for CPU-heavy modules.
+        # They detect static targets so running less frequently is fine.
+        self._frame_counter = 0
+        self._orient_interval = 15  # run orientation every 15 frames
+        self._qr_interval = 10  # run QR every 10 frames
+        self._motion_interval = 2  # run motion every 2 frames
+
+        # Downscaled resolution for CPU-heavy modules (orientation, QR, motion).
+        self._cpu_processing_size = (640, 480)
+
         self.get_logger().info('Detector initialized successfully')
 
     # ------------------------------------------------------------------
@@ -163,31 +173,50 @@ class Detector(Node):
 
         color_image_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-        # --- THE FIX ---
-        # Create the RGB image that will be sent to the YOLO model
-        # and immediately resize it to the expected input size.
+        # Prepare the 640x640 RGB input for YOLO models
         img_rgb_for_yolo = cv2.cvtColor(color_image_bgr, cv2.COLOR_BGR2RGB)
         img_rgb_for_yolo = cv2.resize(img_rgb_for_yolo, self.img_size)
-        # --- END OF FIX ---
 
-        # For visualization, we continue with the BGR image
-        od_frame, _, _ = self.od.process_image(color_image_bgr)
-        qr_frame, qr_detections = process_qr_codes(od_frame)
-        md_frame = self.md.process_image(qr_frame)
+        # Frame skipping: run CPU-heavy modules only every Nth frame.
+        run_orient = self._frame_counter % self._orient_interval == 0
+        run_qr = self._frame_counter % self._qr_interval == 0
+        run_motion = mode == MODE_MAPPING and self._frame_counter % self._motion_interval == 0
+        self._frame_counter += 1
 
-        # We'll draw on the motion-detected frame
-        visualization_frame = md_frame.copy()
+        # Downscale once — used for all CPU modules and as the visualization
+        # canvas.  YOLO boxes are rescaled to this resolution automatically
+        # in _process_hazmat / _process_objects.
+        small = cv2.resize(color_image_bgr, self._cpu_processing_size)
+
+        if run_orient:
+            small, _, _ = self.od.process_image(small)
+
+        qr_detections = []
+        if run_qr:
+            small, qr_detections = process_qr_codes(small)
+
+        # Ego-motion compensated motion detection (optical flow).
+        if run_motion:
+            _, motion_bboxes = self.md.process_image(small)
+            for x, y, bw, bh in motion_bboxes:
+                cv2.rectangle(
+                    small,
+                    (x, y),
+                    (x + bw, y + bh),
+                    (0, 255, 0),
+                    2,
+                )
+
+        visualization_frame = small
 
         if mode in (MODE_SENSOR_CRATE, MODE_MAPPING):
-            # Pass the correctly sized image to the processing function
             self._process_hazmat(visualization_frame, img_rgb_for_yolo, msg)
             self._process_qr_codes(qr_detections, msg)
 
         if mode == MODE_MAPPING:
-            # Pass the correctly sized image to the processing function
             self._process_objects(visualization_frame, img_rgb_for_yolo, msg)
 
-        # Publish the frame with drawn detections
+        # Publish the frame with drawn detections.
         model_output_msg = self.bridge.cv2_to_imgmsg(visualization_frame, encoding='bgr8')
         self.model_pub.publish(model_output_msg)
 
@@ -234,7 +263,7 @@ class Detector(Node):
 
     def _process_hazmat(self, visualization_frame, yolo_input_image, msg):
         try:
-            results = self.model1(yolo_input_image)
+            results = self.model1(yolo_input_image, verbose=False)
 
             for result in results:
                 # Scale boxes from YOLO's 640x640 back to the original image size for correct drawing
@@ -281,7 +310,7 @@ class Detector(Node):
 
     def _process_objects(self, visualization_frame, yolo_input_image, msg):
         try:
-            results = self.model2(yolo_input_image)
+            results = self.model2(yolo_input_image, verbose=False)
 
             for result in results:
                 # Scale boxes from YOLO's 640x640 back to the original image size for correct drawing
