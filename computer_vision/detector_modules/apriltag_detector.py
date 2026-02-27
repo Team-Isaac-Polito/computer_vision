@@ -24,22 +24,17 @@ class AprilTagDetector:
 
             # If a depth image IS available, try to get the real depth
             if depth_image is not None:
-                if (
-                    0 <= mid_y < depth_image.shape[0]
-                    and 0 <= mid_x < depth_image.shape[1]
-                ):
-                    depth_value = (
-                        float(depth_image[mid_y, mid_x]) / 1e3
-                    )  # convert mm to meters
+                if 0 <= mid_y < depth_image.shape[0] and 0 <= mid_x < depth_image.shape[1]:
+                    depth_value = float(depth_image[mid_y, mid_x]) / 1e3  # convert mm to meters
                 else:
                     self.node.get_logger().warn(
-                        f"AprilTag center ({mid_x}, {mid_y}) is out of depth image bounds."
+                        f'AprilTag center ({mid_x}, {mid_y}) is out of depth image bounds.'
                     )
 
             # Use the provided function to create the message
             det_msg = create_detection_msg_func(
                 header=msg.header,
-                det_type="apriltag",
+                det_type='apriltag',
                 label=str(tag_id),
                 conf=1.0,  # AprilTags don't have a confidence score, so we use 1.0
                 x1=x_min,
