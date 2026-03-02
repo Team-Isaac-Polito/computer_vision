@@ -2,18 +2,33 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+)
+from launch.conditions import LaunchConfigurationEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
-    mode_arg = DeclareLaunchArgument(
-        'mode', default_value='2', description='Detection mode to set'
-    )
-
+def launch_setup(context, *args, **kwargs):
     mode = LaunchConfiguration('mode')
+    skip_rs = LaunchConfiguration('skip_realsense').perform(context)
+
+    # When sensors_launch already starts the RealSense under /realsense/ namespace,
+    # remap the detector's camera topics to match
+    remappings = []
+    if skip_rs == 'true':
+        remappings = [
+            ('/camera/color/image_raw', '/realsense/color/image_raw'),
+            (
+                '/camera/aligned_depth_to_color/image_raw',
+                '/realsense/aligned_depth_to_color/image_raw',
+            ),
+        ]
 
     try:
         realsense_pkg_dir = get_package_share_directory('realsense2_camera')
@@ -22,10 +37,9 @@ def generate_launch_description():
         print(f'Warning: realsense2_camera package not found: {e}')
         realsense_launch_file = None
 
-    # ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
-    realsense_camera_launch = []
-    if realsense_launch_file:
-        realsense_camera_launch.append(
+    launch_config = []
+    if realsense_launch_file and skip_rs == 'false':
+        launch_config.append(
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(realsense_launch_file),
                 launch_arguments={
@@ -44,14 +58,18 @@ def generate_launch_description():
     )
 
     detector_node = Node(
-        package='computer_vision', executable='detector', name='detector', output='screen'
+        package='computer_vision',
+        executable='detector',
+        name='detector',
+        output='screen',
+        remappings=remappings,
     )
 
     set_mode_service_call = ExecuteProcess(
         cmd=[
             'sleep',
             '5',
-            '&&',  # wait for nodes to be up
+            '&&',
             'ros2',
             'service',
             'call',
@@ -63,8 +81,19 @@ def generate_launch_description():
         shell=True,
     )
 
-    return LaunchDescription(
-        [mode_arg]
-        + realsense_camera_launch
-        + [detection_manager_node, detector_node, set_mode_service_call]
+    launch_config.extend([detection_manager_node, detector_node, set_mode_service_call])
+    return launch_config
+
+
+def generate_launch_description():
+    mode_arg = DeclareLaunchArgument(
+        'mode', default_value='2', description='Detection mode to set'
     )
+
+    skip_realsense_arg = DeclareLaunchArgument(
+        'skip_realsense',
+        default_value='false',
+        description='Skip RealSense launch (set true when sensors_launch already starts it)',
+    )
+
+    return LaunchDescription([mode_arg, skip_realsense_arg, OpaqueFunction(function=launch_setup)])

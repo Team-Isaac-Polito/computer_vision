@@ -7,13 +7,22 @@ import tf2_ros
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String, UInt8
+from std_msgs.msg import ColorRGBA, String, UInt8
+from visualization_msgs.msg import Marker, MarkerArray
 
 from reseq_interfaces.msg import Detection
 from reseq_interfaces.srv import ComputeCoordinate, GetStatus, SetMode
 
 from .compute_coordinate import compute_coordinate
 from .csv_writer import CSVWriter
+
+# Detection type → marker colour (RGBA)
+_MARKER_COLORS = {
+    'object': ColorRGBA(r=0.0, g=1.0, b=0.0, a=0.9),  # green
+    'hazmat': ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.9),  # red
+    'qr': ColorRGBA(r=0.0, g=0.5, b=1.0, a=0.9),  # blue
+    'apriltag': ColorRGBA(r=1.0, g=0.65, b=0.0, a=0.9),  # orange
+}
 
 # Mode constants
 MODE_OFF = 0
@@ -48,7 +57,7 @@ class DetectionManager(Node):
     def __init__(self):
         super().__init__('detection_manager')
         # parameters
-        self.declare_parameter('target_frame', 'odom')
+        self.declare_parameter('target_frame', 'map')
         self.declare_parameter('csv_default_path', os.path.expanduser('~/reseq_detections.csv'))
         self.declare_parameter('tf_timeout_sec', 0.5)
         self.declare_parameter('f_x', 910.3245)
@@ -104,6 +113,13 @@ class DetectionManager(Node):
         self.pub_qr = self.create_publisher(String, '/qr_text', qos_profile=text_qos)
         self.pub_hazmat = self.create_publisher(String, '/hazmat_text', qos_profile=text_qos)
         self.pub_apriltag = self.create_publisher(String, '/apriltag_text', qos_profile=text_qos)
+        self.pub_markers = self.create_publisher(
+            MarkerArray, '/detection/markers', qos_profile=text_qos
+        )
+
+        # marker tracking
+        self._marker_id = 0
+        self._markers: list[Marker] = []
 
         # subscriptions
         self.sub_detections = self.create_subscription(
@@ -155,6 +171,19 @@ class DetectionManager(Node):
                 return
 
             if mode == MODE_MAPPING:
+                # Publish text topics in MAPPING mode too
+                det_type = getattr(msg, 'type', '').lower()
+                text = getattr(msg, 'name', '')
+                if text:
+                    s = String()
+                    s.data = text
+                    if det_type == 'qr':
+                        self.pub_qr.publish(s)
+                    elif det_type == 'hazmat':
+                        self.pub_hazmat.publish(s)
+                    elif det_type == 'apriltag':
+                        self.pub_apriltag.publish(s)
+
                 required = ['xmin', 'ymin', 'width', 'height', 'depth_center', 'camera_frame']
                 for f in required:
                     if not hasattr(msg, f):
@@ -176,6 +205,13 @@ class DetectionManager(Node):
                 x_target, y_target, z_target = ('', '', '')
                 if success:
                     x_target, y_target, z_target = (point.point.x, point.point.y, point.point.z)
+                    # Publish a marker at the detected position for RViz visualisation
+                    self._add_detection_marker(
+                        point,
+                        det_type=getattr(msg, 'type', 'object'),
+                        name=getattr(msg, 'name', ''),
+                        confidence=getattr(msg, 'confidence', 0.0),
+                    )
                 else:
                     self.get_logger().warn(
                         f'compute_coordinate failed: {message}. Writing to CSV with null coordinates.'
@@ -216,6 +252,55 @@ class DetectionManager(Node):
         except Exception as e:
             self.get_logger().error(f'error processing detection: {e}\n{traceback.format_exc()}')
 
+    def _add_detection_marker(
+        self, point: PointStamped, det_type: str, name: str, confidence: float
+    ):
+        """Create a sphere + text marker pair at the detection's 3-D position."""
+        colour = _MARKER_COLORS.get(det_type.lower(), _MARKER_COLORS['object'])
+        now = self.get_clock().now().to_msg()
+
+        # Sphere marker
+        sphere = Marker()
+        sphere.header.frame_id = point.header.frame_id
+        sphere.header.stamp = now
+        sphere.ns = 'detections'
+        sphere.id = self._marker_id
+        sphere.type = Marker.SPHERE
+        sphere.action = Marker.ADD
+        sphere.pose.position = point.point
+        sphere.pose.orientation.w = 1.0
+        sphere.scale.x = 0.15
+        sphere.scale.y = 0.15
+        sphere.scale.z = 0.15
+        sphere.color = colour
+        sphere.lifetime.sec = 0  # permanent until cleared
+
+        # Text marker (label above sphere)
+        text = Marker()
+        text.header = sphere.header
+        text.ns = 'detection_labels'
+        text.id = self._marker_id
+        text.type = Marker.TEXT_VIEW_FACING
+        text.action = Marker.ADD
+        text.pose.position.x = point.point.x
+        text.pose.position.y = point.point.y
+        text.pose.position.z = point.point.z + 0.25
+        text.pose.orientation.w = 1.0
+        text.scale.z = 0.12  # text height
+        text.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+        label = f'{name}' if name else det_type
+        if confidence > 0:
+            label += f' ({confidence:.0%})'
+        text.text = label
+        text.lifetime.sec = 0
+
+        self._marker_id += 1
+        self._markers.extend([sphere, text])
+
+        ma = MarkerArray()
+        ma.markers = list(self._markers)
+        self.pub_markers.publish(ma)
+
     def _handle_set_mode(self, request, response):
         with self.mode_lock:
             prev = int(self.mode)
@@ -229,6 +314,14 @@ class DetectionManager(Node):
             if prev == MODE_MAPPING and req_mode != MODE_MAPPING and self.csv_writer:
                 self.csv_writer.close()
                 self.csv_writer = None
+                # Clear detection markers when leaving MAPPING mode
+                self._markers.clear()
+                self._marker_id = 0
+                clear_ma = MarkerArray()
+                clear_marker = Marker()
+                clear_marker.action = Marker.DELETEALL
+                clear_ma.markers = [clear_marker]
+                self.pub_markers.publish(clear_ma)
 
             if req_mode == MODE_INITIALIZING:
                 self.initialized = False
