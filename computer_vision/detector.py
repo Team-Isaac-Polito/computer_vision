@@ -229,6 +229,27 @@ class Detector(Node):
             return
         self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
 
+    def _sample_depth(self, x: float, y: float, visualization_frame) -> float:
+        """Sample depth at a bbox center, scaling coords to the depth image size.
+
+        The bbox coordinates are in `visualization_frame` space (typically
+        640x480).  The depth image may be a different resolution (e.g. 1280x720
+        from the RealSense aligned_depth_to_color topic).  We scale the
+        coordinates accordingly and return the depth in metres (0.0 on
+        failure).
+        """
+        if self.depth_image is None:
+            return 0.0
+        vis_h, vis_w = visualization_frame.shape[:2]
+        dep_h, dep_w = self.depth_image.shape[:2]
+        sx = x * (dep_w / vis_w)
+        sy = y * (dep_h / vis_h)
+        mx = int(sx)
+        my = int(sy)
+        if 0 <= my < dep_h and 0 <= mx < dep_w:
+            return float(self.depth_image[my, mx]) / 1e3
+        return 0.0
+
     def _process_qr_codes(self, qr_detections, msg):
         if not qr_detections:
             return
@@ -242,15 +263,7 @@ class Detector(Node):
             x1, y1 = min(x_coords), min(y_coords)
             x2, y2 = max(x_coords), max(y_coords)
 
-            depth_value = 0.0
-            if self.depth_image is not None:
-                mid_x = int((x1 + x2) / 2)
-                mid_y = int((y1 + y2) / 2)
-                if (
-                    0 <= mid_y < self.depth_image.shape[0]
-                    and 0 <= mid_x < self.depth_image.shape[1]
-                ):
-                    depth_value = float(self.depth_image[mid_y, mid_x]) / 1e3
+            depth_value = self._sample_depth((x1 + x2) / 2, (y1 + y2) / 2, visualization_frame)
 
             det_msg = self._create_detection_msg(
                 header=msg.header,
@@ -283,8 +296,7 @@ class Detector(Node):
 
                     x1, y1, x2, y2 = boxes[i]
                     label = result.names[result.boxes.cls[i].item()]
-                    depth_value = 0.0
-                    # Depth calculation would also need coordinate scaling, for now we default to 0
+                    depth_value = self._sample_depth((x1 + x2) / 2, (y1 + y2) / 2, visualization_frame)
 
                     det_msg = self._create_detection_msg(
                         header=msg.header,
@@ -330,8 +342,7 @@ class Detector(Node):
 
                     x1, y1, x2, y2 = boxes[i]
                     label = result.names[result.boxes.cls[i].item()]
-                    depth_value = 0.0
-                    # Depth calculation would also need coordinate scaling, for now we default to 0
+                    depth_value = self._sample_depth((x1 + x2) / 2, (y1 + y2) / 2, visualization_frame)
 
                     det_msg = self._create_detection_msg(
                         header=msg.header,
