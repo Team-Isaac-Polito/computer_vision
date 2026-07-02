@@ -28,6 +28,7 @@ def launch_setup(context, *args, **kwargs):
                 '/camera/aligned_depth_to_color/image_raw',
                 '/realsense/aligned_depth_to_color/image_raw',
             ),
+            ('/camera/depth/color/points', '/realsense/depth/color/points'),
         ]
 
     try:
