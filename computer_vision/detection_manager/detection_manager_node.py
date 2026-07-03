@@ -170,6 +170,7 @@ class DetectionManager(Node):
             if self._map_wait_timer is not None:
                 self._map_wait_timer.cancel()
                 self._map_wait_timer = None
+            self.get_logger().info('detection_manager: map frame is now available')
         except Exception:
             # Map frame not yet available, keep waiting
             pass
