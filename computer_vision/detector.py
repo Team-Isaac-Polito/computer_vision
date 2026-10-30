@@ -278,6 +278,35 @@ class Detector(Node):
             )
             self.detection_pub.publish(det_msg)
 
+    def _draw_labeled_box(self, frame, x1, y1, x2, y2, label, color):
+        x1_i, y1_i, x2_i, y2_i = int(x1), int(y1), int(x2), int(y2)
+
+        cv2.rectangle(frame, (x1_i, y1_i), (x2_i, y2_i), color, 2)
+
+        text = str(label)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        thickness = 2
+
+        (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+        text_x = x1_i
+        text_y = max(text_h + 4, y1_i - 8)
+
+        bg_top_left = (text_x, text_y - text_h - baseline - 4)
+        bg_bottom_right = (text_x + text_w + 4, text_y + baseline)
+
+        cv2.rectangle(frame, bg_top_left, bg_bottom_right, (0, 0, 0), -1)
+        cv2.putText(
+            frame,
+            text,
+            (text_x + 2, text_y - 2),
+            font,
+            font_scale,
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+
     def _process_hazmat(self, visualization_frame, yolo_input_image, msg):
         try:
             results = self.model1(yolo_input_image, verbose=False)
@@ -311,9 +340,7 @@ class Detector(Node):
                     )
                     self.detection_pub.publish(det_msg)
 
-                    cv2.rectangle(
-                        visualization_frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2
-                    )
+                    self._draw_labeled_box(visualization_frame, x1, y1, x2, y2, label, (0, 0, 255))
         except Exception as e:
             self.get_logger().error(f'Error in _process_hazmat: {e}')
 
@@ -357,9 +384,7 @@ class Detector(Node):
                     )
                     self.detection_pub.publish(det_msg)
 
-                    cv2.rectangle(
-                        visualization_frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2
-                    )
+                    self._draw_labeled_box(visualization_frame, x1, y1, x2, y2, label, (255, 0, 0))
         except Exception as e:
             self.get_logger().error(f'Error in _process_objects: {e}')
 
